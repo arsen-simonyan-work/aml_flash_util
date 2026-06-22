@@ -13,7 +13,7 @@ ARCHITECTURE = "amd64"
 INSTALL_DIR = Path("/opt") / PACKAGE_NAME
 EXECUTABLE_NAME = "AmlogicFlashTool"
 ICON_NAME = PACKAGE_NAME
-STARTUP_WM_CLASS = "AmlogicFlashTool"
+STARTUP_WM_CLASS = "amlogic-flash-tool"
 MAINTAINER = "Home"
 DESCRIPTION = "Packaged desktop application."
 
@@ -56,6 +56,7 @@ Name={APP_NAME}
 Exec=/usr/bin/{PACKAGE_NAME}
 Icon={ICON_NAME}
 StartupWMClass={STARTUP_WM_CLASS}
+StartupNotify=true
 Terminal=false
 Categories=Utility;
 """
@@ -80,6 +81,30 @@ Maintainer: {MAINTAINER}
 Description: {DESCRIPTION}
 """
     write_file(package_root / "DEBIAN" / "control", control_file, 0o644)
+
+    postinst = """#!/bin/sh
+set -e
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+exit 0
+"""
+    write_file(package_root / "DEBIAN" / "postinst", postinst, 0o755)
+
+    postrm = """#!/bin/sh
+set -e
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+exit 0
+"""
+    write_file(package_root / "DEBIAN" / "postrm", postrm, 0o755)
 
     output_file = output_dir / f"AmlogicFlashTool-{version}-linux-{ARCHITECTURE}.deb"
     subprocess.run(

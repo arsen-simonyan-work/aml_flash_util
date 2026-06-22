@@ -274,13 +274,24 @@ def check_device():
             text="✅ Устройство Amlogic найдено!",
             text_color=COLOR_GREEN,
         )
-        button_flash.configure(state="normal")
+        if not flash_running:
+            button_flash.configure(
+                state="normal",
+                fg_color=COLOR_ACCENT,
+                hover_color=COLOR_ACCENT_HOVER,
+                text_color=COLOR_ACCENT_TEXT,
+            )
     else:
         label_status.configure(
             text="❌ Устройство НЕ найдено!",
             text_color=COLOR_RED,
         )
-        button_flash.configure(state="disabled")
+        button_flash.configure(
+            state="disabled",
+            fg_color=COLOR_DISABLED_BG,
+            hover_color=COLOR_DISABLED_BG,
+            text_color=COLOR_DISABLED_TEXT,
+        )
 
 
 def select_image():
@@ -394,7 +405,7 @@ def flash_image():
         system_partition_ok = False
         legacy_finish_reported = False
         was_interrupted_prompt = False
-        authorization_cancelled = False
+        authorization_failed = False
         last_output_time = time.monotonic()
 
         try:
@@ -452,8 +463,8 @@ def flash_image():
 
                 update_log(line)
 
-                if "Request dismissed" in line:
-                    authorization_cancelled = True
+                if "Request dismissed" in line or "No authentication agent found" in line:
+                    authorization_failed = True
 
                 progress = extract_progress(line)
                 if progress is not None:
@@ -480,8 +491,11 @@ def flash_image():
             if process.returncode == 0:
                 update_progress(100)
                 update_status("✅ Прошивка завершена успешно!", "green")
-            elif authorization_cancelled:
-                update_status("⚠️ Авторизация pkexec отменена пользователем.", "orange")
+            elif authorization_failed:
+                update_status(
+                    "⚠️ pkexec не смог показать запрос прав. Проверьте polkit-агент в сеансе.",
+                    "orange",
+                )
             elif legacy_finish_reported:
                 # Для S912 это ожидаемый практический сценарий.
                 update_status(
@@ -515,7 +529,7 @@ def flash_image():
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-root = ctk.CTk(className="AmlogicFlashTool")
+root = ctk.CTk(className="amlogic-flash-tool")
 root.title(f"Amlogic Flash Tool {__version__}")
 root.geometry("1120x720")
 root.minsize(920, 660)
