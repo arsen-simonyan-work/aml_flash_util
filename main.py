@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import textwrap
 import time
@@ -90,11 +91,6 @@ def wrap_ui_text(text, width=40):
 
 
 def apply_window_identity():
-    if sys.platform.startswith("linux"):
-        # Match StartupWMClass in the generated desktop entry so docks can
-        # associate the running window with the installed application.
-        root.wm_class("AmlogicFlashTool", "AmlogicFlashTool")
-
     if APP_ICON_PATH.is_file():
         try:
             icon_image = tk.PhotoImage(file=str(APP_ICON_PATH))
@@ -519,7 +515,7 @@ def flash_image():
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-root = ctk.CTk()
+root = ctk.CTk(className="AmlogicFlashTool")
 root.title(f"Amlogic Flash Tool {__version__}")
 root.geometry("1120x720")
 root.minsize(920, 660)
