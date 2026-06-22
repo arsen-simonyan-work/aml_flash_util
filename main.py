@@ -24,6 +24,7 @@ from version import __version__
 # затем используем установленный в системе aml-burn-tool.
 AML_BURN_TOOL = get_resource_path("aml-flash-tool", "aml-burn-tool")
 AML_BURN_TOOL_FALLBACK = Path("/usr/local/bin/aml-burn-tool")
+APP_ICON_PATH = get_resource_path("assets", "icons", "app-icon.png")
 
 # Для старых S912 образов aml-flash-tool может записать system partition,
 # но не завершить процесс штатно. В этом режиме после system [OK]
@@ -86,6 +87,21 @@ def ui_color(color_name):
 
 def wrap_ui_text(text, width=40):
     return textwrap.fill(text, width=width)
+
+
+def apply_window_identity():
+    if sys.platform.startswith("linux"):
+        # Match StartupWMClass in the generated desktop entry so docks can
+        # associate the running window with the installed application.
+        root.wm_class("AmlogicFlashTool", "AmlogicFlashTool")
+
+    if APP_ICON_PATH.is_file():
+        try:
+            icon_image = tk.PhotoImage(file=str(APP_ICON_PATH))
+            root.iconphoto(True, icon_image)
+            root._app_icon_image = icon_image
+        except tk.TclError:
+            pass
 
 
 # ----------------------------- UI helpers -----------------------------
@@ -382,6 +398,7 @@ def flash_image():
         system_partition_ok = False
         legacy_finish_reported = False
         was_interrupted_prompt = False
+        authorization_cancelled = False
         last_output_time = time.monotonic()
 
         try:
@@ -439,6 +456,9 @@ def flash_image():
 
                 update_log(line)
 
+                if "Request dismissed" in line:
+                    authorization_cancelled = True
+
                 progress = extract_progress(line)
                 if progress is not None:
                     update_progress(progress)
@@ -464,6 +484,8 @@ def flash_image():
             if process.returncode == 0:
                 update_progress(100)
                 update_status("✅ Прошивка завершена успешно!", "green")
+            elif authorization_cancelled:
+                update_status("⚠️ Авторизация pkexec отменена пользователем.", "orange")
             elif legacy_finish_reported:
                 # Для S912 это ожидаемый практический сценарий.
                 update_status(
@@ -502,6 +524,7 @@ root.title(f"Amlogic Flash Tool {__version__}")
 root.geometry("1120x720")
 root.minsize(920, 660)
 root.configure(fg_color="#08101b")
+apply_window_identity()
 root.grid_columnconfigure(0, weight=1)
 root.grid_rowconfigure(0, weight=1)
 
