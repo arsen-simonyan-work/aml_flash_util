@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Amlogic Flash Tool
-Comment=Прошивка устройств Amlogic
-Exec=/usr/bin/python3 "/home/user/aml_flash_util/aml_flash.py"
-Icon=utilities-terminal
-Terminal=false
-Categories=Utility;

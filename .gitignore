@@ -1,1 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Build outputs
+build/
+dist/
+artifacts/
+*.egg-info/
+
+# IDE / editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Tool logs
 rk-flash-tool/tools/Linux_Upgrade_Tool/log/
