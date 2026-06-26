@@ -8,7 +8,6 @@ import textwrap
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
 
 try:
     import customtkinter as ctk
@@ -19,6 +18,7 @@ except ImportError as exc:
     ) from exc
 
 from app_paths import get_resource_path
+from custom_file_browser import CompactFileBrowserDialog
 from version import __version__
 
 # Для Linux сначала ищем backend рядом с приложением/репозиторием,
@@ -26,6 +26,15 @@ from version import __version__
 AML_BURN_TOOL = get_resource_path("aml-flash-tool", "aml-burn-tool")
 AML_BURN_TOOL_FALLBACK = Path("/usr/local/bin/aml-burn-tool")
 APP_ICON_PATH = get_resource_path("assets", "icons", "app-icon.png")
+PKEXEC_ENV_KEYS = (
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+    "XDG_CURRENT_DESKTOP",
+    "DESKTOP_SESSION",
+)
 
 # Для старых S912 образов aml-flash-tool может записать system partition,
 # но не завершить процесс штатно. В этом режиме после system [OK]
@@ -88,6 +97,35 @@ def ui_color(color_name):
 
 def wrap_ui_text(text, width=40):
     return textwrap.fill(text, width=width)
+
+
+def ensure_valid_cwd():
+    try:
+        Path.cwd()
+        return
+    except FileNotFoundError:
+        pass
+
+    for candidate in (Path.home(), Path(__file__).resolve().parent):
+        if candidate.is_dir():
+            os.chdir(candidate)
+            return
+
+
+def get_dialog_initial_dir():
+    entry_value = entry_path.get().strip() if "entry_path" in globals() else ""
+    if entry_value:
+        candidate = Path(entry_value).expanduser()
+        if candidate.is_file():
+            candidate = candidate.parent
+        if candidate.is_dir():
+            return str(candidate)
+
+    for candidate in (Path.home(), Path(__file__).resolve().parent):
+        if candidate.is_dir():
+            return str(candidate)
+
+    return "/"
 
 
 def apply_window_identity():
@@ -181,6 +219,40 @@ def resolve_aml_burn_tool():
     return None
 
 
+def build_flash_command(aml_burn_tool, board, image_path, skip_usb_check):
+    tool_command = [aml_burn_tool, "-b", board]
+    if skip_usb_check:
+        tool_command.append("-s")
+    tool_command.extend(["-i", image_path])
+
+    if os.name != "posix" or os.geteuid() == 0:
+        return tool_command
+
+    forwarded_env = [
+        f"{key}={value}"
+        for key in PKEXEC_ENV_KEYS
+        if (value := os.environ.get(key))
+    ]
+    return ["pkexec", "env", *forwarded_env, *tool_command]
+
+
+def get_polkit_env_diagnostics():
+    diagnostics = []
+
+    for key in ("DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XAUTHORITY"):
+        value = os.environ.get(key)
+        diagnostics.append(f"{key}={'set' if value else 'missing'}")
+
+    if AML_BURN_TOOL_FALLBACK.is_symlink():
+        diagnostics.append(f"/usr/local/bin/aml-burn-tool -> {AML_BURN_TOOL_FALLBACK.resolve(strict=False)}")
+    elif AML_BURN_TOOL_FALLBACK.exists():
+        diagnostics.append("/usr/local/bin/aml-burn-tool exists, but is not a symlink")
+    else:
+        diagnostics.append("/usr/local/bin/aml-burn-tool is missing")
+
+    return diagnostics
+
+
 def detect_board_from_image(image_path):
     """
     Возвращает tuple: (board, legacy_mode, reason)
@@ -250,8 +322,6 @@ def on_profile_changed(_event=None):
     update_detected_profile_label()
 
 
-# ----------------------------- Device / file -----------------------------
-
 def check_device():
     try:
         result = subprocess.run(
@@ -295,10 +365,31 @@ def check_device():
 
 
 def select_image():
-    file_path = filedialog.askopenfilename(
+    ensure_valid_cwd()
+    file_path = CompactFileBrowserDialog(
+        root,
+        initial_dir=get_dialog_initial_dir(),
         title="Выберите прошивку",
-        filetypes=[("Firmware files", "*.img"), ("All files", "*")],
-    )
+        icon_path=APP_ICON_PATH,
+        allowed_extensions={".img"},
+        body_font=body_font,
+        button_font=button_font,
+        theme={
+            "panel": COLOR_PANEL,
+            "panel_alt": "#0f1a2b",
+            "surface": COLOR_PANEL_ALT,
+            "border": COLOR_BORDER,
+            "text": COLOR_TEXT,
+            "accent": COLOR_ACCENT,
+            "accent_hover": COLOR_ACCENT_HOVER,
+            "accent_text": COLOR_ACCENT_TEXT,
+            "disabled_bg": COLOR_DISABLED_BG,
+            "disabled_text": COLOR_DISABLED_TEXT,
+            "item_hover": "#122033",
+            "secondary_button": "#243244",
+            "secondary_button_hover": "#334155",
+        },
+    ).show()
 
     if not file_path:
         return
@@ -389,13 +480,17 @@ def flash_image():
     update_log(f"ℹ️ Причина выбора: {reason}")
     update_log(f"🧩 Режим завершения: {'legacy S912' if legacy_mode else 'normal'}")
 
-    command = ["pkexec", aml_burn_tool, "-b", board]
+    skip_usb_check = skip_usb_check_var.get()
+    command = build_flash_command(
+        aml_burn_tool=aml_burn_tool,
+        board=board,
+        image_path=image_path,
+        skip_usb_check=skip_usb_check,
+    )
 
-    if skip_usb_check_var.get():
-        command.append("-s")
+    if skip_usb_check:
         update_log("🔌 Используется ключ -s: предварительная USB-проверка пропущена.")
 
-    command.extend(["-i", image_path])
     update_log("▶️ Команда: " + " ".join(command))
     update_status("⏳ Идет прошивка...", "blue")
 
@@ -405,7 +500,8 @@ def flash_image():
         system_partition_ok = False
         legacy_finish_reported = False
         was_interrupted_prompt = False
-        authorization_failed = False
+        auth_request_dismissed = False
+        auth_agent_missing = False
         last_output_time = time.monotonic()
 
         try:
@@ -463,8 +559,11 @@ def flash_image():
 
                 update_log(line)
 
-                if "Request dismissed" in line or "No authentication agent found" in line:
-                    authorization_failed = True
+                if "Request dismissed" in line:
+                    auth_request_dismissed = True
+
+                if "No authentication agent found" in line:
+                    auth_agent_missing = True
 
                 progress = extract_progress(line)
                 if progress is not None:
@@ -491,9 +590,18 @@ def flash_image():
             if process.returncode == 0:
                 update_progress(100)
                 update_status("✅ Прошивка завершена успешно!", "green")
-            elif authorization_failed:
+            elif auth_agent_missing:
+                for diagnostic in get_polkit_env_diagnostics():
+                    update_log(f"ℹ️ {diagnostic}")
                 update_status(
-                    "⚠️ pkexec не смог показать запрос прав. Проверьте polkit-агент в сеансе.",
+                    "⚠️ pkexec не смог показать запрос прав. Исправьте polkit/GNOME-сессию и повторите запуск.",
+                    "orange",
+                )
+            elif auth_request_dismissed:
+                for diagnostic in get_polkit_env_diagnostics():
+                    update_log(f"ℹ️ {diagnostic}")
+                update_status(
+                    "⚠️ Системный запрос прав был закрыт или не показан. Исправьте polkit/GNOME-сессию и повторите запуск.",
                     "orange",
                 )
             elif legacy_finish_reported:
@@ -528,12 +636,20 @@ def flash_image():
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
+ctk.set_widget_scaling(1.0)
+ctk.set_window_scaling(1.0)
+
+ensure_valid_cwd()
 
 root = ctk.CTk(className="amlogic-flash-tool")
 root.title(f"Amlogic Flash Tool {__version__}")
 root.geometry("1120x720")
 root.minsize(920, 660)
-root.configure(fg_color="#08101b")
+root.configure(fg_color=COLOR_PANEL)
+try:
+    root.tk.call("tk", "scaling", 1.0)
+except tk.TclError:
+    pass
 apply_window_identity()
 root.grid_columnconfigure(0, weight=1)
 root.grid_rowconfigure(0, weight=1)
@@ -551,8 +667,8 @@ content_frame.grid_rowconfigure(0, weight=1)
 
 sidebar = ctk.CTkFrame(
     content_frame,
-    width=356,
-    corner_radius=18,
+    width=376,
+    corner_radius=12,
     fg_color=COLOR_PANEL,
     border_width=1,
     border_color=COLOR_BORDER,
@@ -560,7 +676,7 @@ sidebar = ctk.CTkFrame(
 sidebar.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
 sidebar.grid_columnconfigure(0, weight=1)
 
-device_card = ctk.CTkFrame(sidebar, fg_color="#0f1a2b", corner_radius=14)
+device_card = ctk.CTkFrame(sidebar, fg_color="#0f1a2b", corner_radius=10)
 device_card.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
 device_card.grid_columnconfigure(0, weight=1)
 
@@ -579,9 +695,9 @@ button_check = ctk.CTkButton(
     device_head,
     text="Проверить",
     command=check_device,
-    width=102,
+    width=118,
     height=34,
-    corner_radius=11,
+    corner_radius=10,
     fg_color=COLOR_ACCENT,
     hover_color=COLOR_ACCENT_HOVER,
     text_color=COLOR_ACCENT_TEXT,
@@ -591,14 +707,14 @@ button_check.grid(row=0, column=1, sticky="e")
 
 label_status = ctk.CTkLabel(
     device_card,
-    text=wrap_ui_text("Проверьте USB-подключение.", width=34),
+    text=wrap_ui_text("Проверьте USB-подключение.", width=38),
     font=body_font,
     text_color=COLOR_BLUE,
     justify="left",
 )
 label_status.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 12))
 
-file_card = ctk.CTkFrame(sidebar, fg_color="#0f1a2b", corner_radius=14)
+file_card = ctk.CTkFrame(sidebar, fg_color="#0f1a2b", corner_radius=10)
 file_card.grid(row=1, column=0, sticky="ew", padx=12, pady=8)
 file_card.grid_columnconfigure(0, weight=1)
 
@@ -612,7 +728,7 @@ ctk.CTkLabel(
 entry_path = ctk.CTkEntry(
     file_card,
     height=38,
-    corner_radius=11,
+    corner_radius=10,
     placeholder_text="Выберите .img файл",
     fg_color="#0b1220",
     border_color=COLOR_BORDER,
@@ -624,9 +740,9 @@ button_select_file = ctk.CTkButton(
     file_card,
     text="Обзор",
     command=select_image,
-    width=88,
+    width=96,
     height=36,
-    corner_radius=11,
+    corner_radius=10,
     fg_color=COLOR_ACCENT,
     hover_color=COLOR_ACCENT_HOVER,
     text_color=COLOR_ACCENT_TEXT,
@@ -634,7 +750,7 @@ button_select_file = ctk.CTkButton(
 )
 button_select_file.grid(row=1, column=1, padx=(0, 12), pady=(0, 12))
 
-profile_card = ctk.CTkFrame(sidebar, fg_color="#0f1a2b", corner_radius=14)
+profile_card = ctk.CTkFrame(sidebar, fg_color="#0f1a2b", corner_radius=10)
 profile_card.grid(row=2, column=0, sticky="ew", padx=12, pady=8)
 profile_card.grid_columnconfigure(0, weight=1)
 
@@ -652,7 +768,7 @@ combo_profile = ctk.CTkComboBox(
     values=PROFILE_OPTIONS,
     state="readonly",
     height=38,
-    corner_radius=11,
+    corner_radius=10,
     command=on_profile_changed,
     fg_color="#0b1220",
     border_color=COLOR_BORDER,
@@ -722,7 +838,7 @@ ctk.CTkLabel(
 
 label_detected_profile = ctk.CTkLabel(
     profile_card,
-    text=wrap_ui_text("Профиль: файл ещё не выбран"),
+    text=wrap_ui_text("Профиль: файл ещё не выбран", width=38),
     text_color=COLOR_MUTED,
     font=body_font,
     justify="left",
@@ -731,7 +847,7 @@ label_detected_profile.grid(row=4, column=0, sticky="w", padx=12, pady=(8, 12))
 
 workspace = ctk.CTkFrame(
     content_frame,
-    corner_radius=18,
+    corner_radius=12,
     fg_color=COLOR_PANEL,
     border_width=1,
     border_color=COLOR_BORDER,
@@ -740,7 +856,7 @@ workspace.grid(row=0, column=1, sticky="nsew")
 workspace.grid_columnconfigure(0, weight=1)
 workspace.grid_rowconfigure(1, weight=1)
 
-summary_card = ctk.CTkFrame(workspace, fg_color="#0f1a2b", corner_radius=14)
+summary_card = ctk.CTkFrame(workspace, fg_color="#0f1a2b", corner_radius=10)
 summary_card.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
 summary_card.grid_columnconfigure(0, weight=1)
 
@@ -770,7 +886,7 @@ progress_bar = ctk.CTkProgressBar(
 progress_bar.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
 progress_bar.set(0)
 
-log_card = ctk.CTkFrame(workspace, fg_color="#0f1a2b", corner_radius=14)
+log_card = ctk.CTkFrame(workspace, fg_color="#0f1a2b", corner_radius=10)
 log_card.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
 log_card.grid_columnconfigure(0, weight=1)
 log_card.grid_rowconfigure(1, weight=1)
@@ -784,7 +900,7 @@ ctk.CTkLabel(
 
 log_text = ctk.CTkTextbox(
     log_card,
-    corner_radius=12,
+    corner_radius=10,
     fg_color="#09111d",
     border_width=1,
     border_color=COLOR_BORDER,
@@ -812,9 +928,9 @@ button_flash = ctk.CTkButton(
     text="Прошить устройство",
     command=flash_image,
     state="disabled",
-    width=186,
+    width=210,
     height=40,
-    corner_radius=12,
+    corner_radius=10,
     fg_color=COLOR_DISABLED_BG,
     hover_color=COLOR_DISABLED_BG,
     text_color=COLOR_DISABLED_TEXT,
