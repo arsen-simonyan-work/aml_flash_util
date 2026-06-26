@@ -7,13 +7,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from version import APP_NAME, PACKAGE_NAME, read_version
+from version import APP_NAME, APP_WM_CLASS, PACKAGE_NAME, read_version
 
 ARCHITECTURE = "amd64"
 INSTALL_DIR = Path("/opt") / PACKAGE_NAME
 EXECUTABLE_NAME = "AmlogicFlashTool"
 ICON_NAME = PACKAGE_NAME
-STARTUP_WM_CLASS = "amlogic-flash-tool"
+STARTUP_WM_CLASS = APP_WM_CLASS
 MAINTAINER = "Home"
 DESCRIPTION = "Packaged desktop application."
 
@@ -56,7 +56,6 @@ Name={APP_NAME}
 Exec=/usr/bin/{PACKAGE_NAME}
 Icon={ICON_NAME}
 StartupWMClass={STARTUP_WM_CLASS}
-StartupNotify=true
 Terminal=false
 Categories=Utility;
 """
@@ -71,6 +70,12 @@ Categories=Utility;
         destination = package_root / "usr" / "share" / "icons" / relative_icon_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(icon_file, destination)
+
+    pixmaps_icon = ROOT / "assets" / "icons" / "app-icon.png"
+    if pixmaps_icon.exists():
+        pixmaps_destination = package_root / "usr" / "share" / "pixmaps" / f"{PACKAGE_NAME}.png"
+        pixmaps_destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pixmaps_icon, pixmaps_destination)
 
     control_file = f"""Package: {PACKAGE_NAME}
 Version: {version}

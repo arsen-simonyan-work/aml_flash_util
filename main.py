@@ -19,22 +19,13 @@ except ImportError as exc:
 
 from app_paths import get_resource_path
 from custom_file_browser import CompactFileBrowserDialog
-from version import __version__
+from version import APP_NAME, APP_WM_CLASS, __version__
 
 # Для Linux сначала ищем backend рядом с приложением/репозиторием,
 # затем используем установленный в системе aml-burn-tool.
 AML_BURN_TOOL = get_resource_path("aml-flash-tool", "aml-burn-tool")
 AML_BURN_TOOL_FALLBACK = Path("/usr/local/bin/aml-burn-tool")
 APP_ICON_PATH = get_resource_path("assets", "icons", "app-icon.png")
-PKEXEC_ENV_KEYS = (
-    "DISPLAY",
-    "WAYLAND_DISPLAY",
-    "XAUTHORITY",
-    "DBUS_SESSION_BUS_ADDRESS",
-    "XDG_RUNTIME_DIR",
-    "XDG_CURRENT_DESKTOP",
-    "DESKTOP_SESSION",
-)
 
 # Для старых S912 образов aml-flash-tool может записать system partition,
 # но не завершить процесс штатно. В этом режиме после system [OK]
@@ -81,6 +72,9 @@ COLOR_ACCENT_HOVER = "#16a34a"
 COLOR_ACCENT_TEXT = "#052e16"
 COLOR_DISABLED_BG = "#1e293b"
 COLOR_DISABLED_TEXT = "#7c8aa5"
+
+SUDO_DIALOG_WIDTH = 420
+SUDO_DIALOG_HEIGHT = 220
 
 
 def ui_color(color_name):
@@ -199,6 +193,94 @@ def set_flash_controls(is_running):
     run_on_ui(_update)
 
 
+def ask_sudo_password():
+    password_window = ctk.CTkToplevel(root)
+    password_window.title("Sudo пароль")
+    password_window.geometry(f"{SUDO_DIALOG_WIDTH}x{SUDO_DIALOG_HEIGHT}")
+    password_window.resizable(False, False)
+    password_window.transient(root)
+    password_window.configure(fg_color=COLOR_PANEL)
+    password_window.lift()
+    password_window.attributes("-topmost", True)
+    password_window.protocol("WM_DELETE_WINDOW", lambda: on_cancel())
+    password_window.grid_columnconfigure((0, 1), weight=1)
+
+    password_var = tk.StringVar()
+    result = {"password": None}
+
+    def on_ok(_event=None):
+        result["password"] = password_var.get().strip()
+        if password_window.winfo_exists():
+            password_window.grab_release()
+            password_window.destroy()
+
+    def on_cancel(_event=None):
+        if password_window.winfo_exists():
+            password_window.grab_release()
+            password_window.destroy()
+
+    ctk.CTkLabel(
+        password_window,
+        text="Для прошивки устройства нужны права sudo.",
+        font=section_title_font,
+        text_color=COLOR_TEXT,
+        wraplength=360,
+        justify="center",
+    ).grid(row=0, column=0, columnspan=2, padx=20, pady=(24, 10), sticky="ew")
+
+    ctk.CTkLabel(
+        password_window,
+        text="Пароль используется только для текущего запуска aml-burn-tool.",
+        font=body_font,
+        text_color=COLOR_MUTED,
+        wraplength=360,
+        justify="center",
+    ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 14), sticky="ew")
+
+    password_entry = ctk.CTkEntry(
+        password_window,
+        textvariable=password_var,
+        show="*",
+        height=40,
+        corner_radius=10,
+        fg_color=COLOR_PANEL_ALT,
+        border_color=COLOR_BORDER,
+        text_color=COLOR_TEXT,
+    )
+    password_entry.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 18), sticky="ew")
+    password_entry.bind("<Return>", on_ok)
+    password_entry.bind("<KP_Enter>", on_ok)
+
+    ctk.CTkButton(
+        password_window,
+        text="Отмена",
+        height=38,
+        corner_radius=10,
+        fg_color="#243244",
+        hover_color="#334155",
+        text_color=COLOR_TEXT,
+        command=on_cancel,
+    ).grid(row=3, column=0, padx=(20, 10), pady=(0, 20), sticky="ew")
+
+    ctk.CTkButton(
+        password_window,
+        text="Продолжить",
+        height=38,
+        corner_radius=10,
+        fg_color=COLOR_ACCENT,
+        hover_color=COLOR_ACCENT_HOVER,
+        text_color=COLOR_ACCENT_TEXT,
+        command=on_ok,
+    ).grid(row=3, column=1, padx=(10, 20), pady=(0, 20), sticky="ew")
+
+    password_window.bind("<Escape>", on_cancel)
+    password_window.after(120, password_entry.focus_set)
+    password_window.after(180, lambda: password_window.attributes("-topmost", False))
+    password_window.grab_set()
+    root.wait_window(password_window)
+    return result["password"] or None
+
+
 # ----------------------------- Detection -----------------------------
 
 def clean_line(line):
@@ -219,38 +301,12 @@ def resolve_aml_burn_tool():
     return None
 
 
-def build_flash_command(aml_burn_tool, board, image_path, skip_usb_check):
+def build_flash_tool_command(aml_burn_tool, board, image_path, skip_usb_check):
     tool_command = [aml_burn_tool, "-b", board]
     if skip_usb_check:
         tool_command.append("-s")
     tool_command.extend(["-i", image_path])
-
-    if os.name != "posix" or os.geteuid() == 0:
-        return tool_command
-
-    forwarded_env = [
-        f"{key}={value}"
-        for key in PKEXEC_ENV_KEYS
-        if (value := os.environ.get(key))
-    ]
-    return ["pkexec", "env", *forwarded_env, *tool_command]
-
-
-def get_polkit_env_diagnostics():
-    diagnostics = []
-
-    for key in ("DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XAUTHORITY"):
-        value = os.environ.get(key)
-        diagnostics.append(f"{key}={'set' if value else 'missing'}")
-
-    if AML_BURN_TOOL_FALLBACK.is_symlink():
-        diagnostics.append(f"/usr/local/bin/aml-burn-tool -> {AML_BURN_TOOL_FALLBACK.resolve(strict=False)}")
-    elif AML_BURN_TOOL_FALLBACK.exists():
-        diagnostics.append("/usr/local/bin/aml-burn-tool exists, but is not a symlink")
-    else:
-        diagnostics.append("/usr/local/bin/aml-burn-tool is missing")
-
-    return diagnostics
+    return tool_command
 
 
 def detect_board_from_image(image_path):
@@ -464,6 +520,14 @@ def flash_image():
         )
         return
 
+    sudo_password = None
+    needs_sudo = os.name == "posix" and os.geteuid() != 0
+    if needs_sudo:
+        sudo_password = ask_sudo_password()
+        if not sudo_password:
+            update_status("⚠️ Пароль sudo не введён. Прошивка отменена.", "orange")
+            return
+
     with flash_lock:
         if flash_running:
             update_status("⚠️ Прошивка уже запущена.", "orange")
@@ -481,12 +545,16 @@ def flash_image():
     update_log(f"🧩 Режим завершения: {'legacy S912' if legacy_mode else 'normal'}")
 
     skip_usb_check = skip_usb_check_var.get()
-    command = build_flash_command(
+    tool_command = build_flash_tool_command(
         aml_burn_tool=aml_burn_tool,
         board=board,
         image_path=image_path,
         skip_usb_check=skip_usb_check,
     )
+    command = tool_command
+    if needs_sudo:
+        command = ["sudo", "-S", "-k", "-p", "", *tool_command]
+        update_log("🔐 Используется встроенная sudo-авторизация приложения.")
 
     if skip_usb_check:
         update_log("🔌 Используется ключ -s: предварительная USB-проверка пропущена.")
@@ -500,8 +568,7 @@ def flash_image():
         system_partition_ok = False
         legacy_finish_reported = False
         was_interrupted_prompt = False
-        auth_request_dismissed = False
-        auth_agent_missing = False
+        sudo_auth_failed = False
         last_output_time = time.monotonic()
 
         try:
@@ -516,6 +583,10 @@ def flash_image():
 
             with flash_lock:
                 flash_process = process
+
+            if needs_sudo and process.stdin is not None:
+                process.stdin.write(f"{sudo_password}\n")
+                process.stdin.flush()
 
             def watchdog():
                 nonlocal legacy_finish_reported
@@ -559,11 +630,12 @@ def flash_image():
 
                 update_log(line)
 
-                if "Request dismissed" in line:
-                    auth_request_dismissed = True
-
-                if "No authentication agent found" in line:
-                    auth_agent_missing = True
+                if (
+                    "Sorry, try again." in line
+                    or "sudo: no password was provided" in line
+                    or "incorrect password attempt" in line
+                ):
+                    sudo_auth_failed = True
 
                 progress = extract_progress(line)
                 if progress is not None:
@@ -590,20 +662,8 @@ def flash_image():
             if process.returncode == 0:
                 update_progress(100)
                 update_status("✅ Прошивка завершена успешно!", "green")
-            elif auth_agent_missing:
-                for diagnostic in get_polkit_env_diagnostics():
-                    update_log(f"ℹ️ {diagnostic}")
-                update_status(
-                    "⚠️ pkexec не смог показать запрос прав. Исправьте polkit/GNOME-сессию и повторите запуск.",
-                    "orange",
-                )
-            elif auth_request_dismissed:
-                for diagnostic in get_polkit_env_diagnostics():
-                    update_log(f"ℹ️ {diagnostic}")
-                update_status(
-                    "⚠️ Системный запрос прав был закрыт или не показан. Исправьте polkit/GNOME-сессию и повторите запуск.",
-                    "orange",
-                )
+            elif sudo_auth_failed:
+                update_status("❌ Неверный sudo-пароль или доступ отклонён.", "red")
             elif legacy_finish_reported:
                 # Для S912 это ожидаемый практический сценарий.
                 update_status(
@@ -641,8 +701,8 @@ ctk.set_window_scaling(1.0)
 
 ensure_valid_cwd()
 
-root = ctk.CTk(className="amlogic-flash-tool")
-root.title(f"Amlogic Flash Tool {__version__}")
+root = ctk.CTk(className=APP_WM_CLASS)
+root.title(f"{APP_NAME} {__version__}")
 root.geometry("1120x720")
 root.minsize(920, 660)
 root.configure(fg_color=COLOR_PANEL)
@@ -650,7 +710,6 @@ try:
     root.tk.call("tk", "scaling", 1.0)
 except tk.TclError:
     pass
-apply_window_identity()
 root.grid_columnconfigure(0, weight=1)
 root.grid_rowconfigure(0, weight=1)
 
@@ -917,7 +976,7 @@ action_bar.grid_columnconfigure(0, weight=1)
 
 ctk.CTkLabel(
     action_bar,
-    text="Используются pkexec и aml-burn-tool.",
+    text="Используются sudo и aml-burn-tool.",
     font=body_font,
     text_color=COLOR_MUTED,
     justify="left",
@@ -939,4 +998,5 @@ button_flash = ctk.CTkButton(
 button_flash.grid(row=0, column=1, sticky="e")
 
 update_detected_profile_label()
+root.after(50, apply_window_identity)
 root.mainloop()

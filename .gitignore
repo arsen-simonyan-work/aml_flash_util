@@ -1,11 +1,19 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Virtual environments
 venv/
 .venv/
 env/
+.python-version
 
 # Build outputs
 build/
@@ -16,6 +24,11 @@ artifacts/
 # IDE / editor
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
 
 # OS files
 .DS_Store

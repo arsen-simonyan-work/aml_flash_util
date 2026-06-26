@@ -4,6 +4,7 @@ from pathlib import Path
 APP_NAME = "Amlogic Flash Tool"
 PACKAGE_NAME = "amlogic-flash-tool"
 BUNDLE_ID = "com.home.amlogicflashtool"
+APP_WM_CLASS = "Amlogicflashtool"
 
 
 def version_file_candidates() -> list[Path]:
